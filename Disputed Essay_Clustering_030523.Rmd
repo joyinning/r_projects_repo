@@ -1,0 +1,388 @@
+---
+title: "Who Wrote the Disputed Essays?"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Step 0 Goal <br>
+The goal is to find which person wrote the dispute essays, Hamilton or Madison, using a clustering algorithm with the K-Means and HAC(Hierarchical Algorithm Clustering) functions. <br>
+- To provide evidence for each function to demonstrate the learned patterns. <br>
+- To figure out the location of the papers with joint authorship.
+
+*****
+
+### Historical Background
+The Federalist Papers were a series of eighty-five essays urging the citizens of New York to ratify the new United States Constitution. 
+
+Written by Alexander Hamilton, James Madison, and John Jay, the essays orignially appeared anonymously in New York newspapers in 1787 and 1788 under the pen name “Publius.”
+
+A bound edition of the essays was first published in 1788, but it was not until the 1818 edition published by the printer Jacob Gideon that the authors of each essay were identified by name. The Federalist Papers are considered one of the most important sources for interpreting and understanding the original intent of the Constitution. 
+
+About the disputed authorship, the original essays can be downloaded from the Library of Congress. [http://thomas.loc.gov/home/histdox/fedpapers.html](http://thomas.loc.gov/home/histdox/fedpapers.html)<br>
+
+Research guides: Federalist papers: Primary documents in American history: Introduction. Introduction - Federalist Papers: Primary Documents in American History - Research Guides at Library of Congress. (n.d.). Retrieved March 4, 2023, from http://www.loc.gov/rr/program/bib/ourdocs/federalist.html 
+
+*****
+
+## Step 1 Collecting data 
+
+### Install and Load R Packages
+We must install and load some R packages as following before starting the analysis. <br>
+1. **RWeka**: weka (deep learning) implemenation in R <br>
+- https://cran.r-project.org/web/packages/RWeka/RWeka.pdf <br>
+2. **tidyverse**: data manipulation <br>
+- https://cran.r-project.org/web/packages/tidyverse/tidyverse.pdf <br>
+3. **cluster**: clustering algorithms <br> https://cran.r-project.org/web/packages/cluster/cluster.pdf <br>
+4. **factoextra**: clustering algorithms and visualization <br>
+- https://rpkgs.datanovia.com/factoextra/index.html <br>
+- https://cran.r-project.org/web/packages/factoextra/factoextra.pdf <br>
+5. **gridExtra**: for the layout of subfigures <br>
+- https://cran.r-project.org/web/packages/gridExtra/gridExtra.pdf <br>
+6. **stats**: for using the k-means algorithm <br>
+https://stat.ethz.ch/R-manual/R-devel/library/stats/html/00Index.html <br>
+7. **dendextend**: for comparing two dendrograms <br>
+https://cran.r-project.org/web/packages/dendextend/vignettes/dendextend.html <br>
+
+```{r}
+#install.packages('RWeka')      # Weka implementation in R
+#install.packages('tidyverse')  # data manipulation
+#install.packages('cluster')    # clustering algorithms
+#install.packages('factoextra') # clustering algorithms & visualization
+#install.packages('gridExtra')  # for the layout of subfigures
+#install.packages('dendextend') # for comparing two dendrograms
+```
+```{r}
+library('RWeka')    
+library('tidyverse')  
+library('cluster')    
+library('factoextra') 
+library('gridExtra')  
+library('stats')
+library('dendextend')
+```
+
+*****
+
+## Step 2 Uploading, Exploring, and Preparing the Data
+
+### Upload the dataset
+
+```{r}
+paper <- read.csv("/Users/jenkim/Desktop/SU ADS/IST 707/Week 4/Notes (Lecture)/hw/HW4-data-fedPapers85(1).csv")
+```
+
+### Explore the dataset
+
+```{r}
+str(paper)
+```
+
+The paper dataset has information on 85 essays with 72 features, including the name of the author, the file name, and the rest, which indicates the percentage of occurrence for each word in one essay. <br>
+<br>
+1. The number of essays for each author is given as the following. The 11 reputed essays are the targets in this project for predicting authorship. <br>
+- 51 essays written by Hamilton***(Hamilton)*** <br>
+- 15 essays by Madison***(Madison)*** <br>
+- 3 essays by Hamilton and Madison***(HM)*** <br>
+- 5 essays by Jay***(Jay)***. <br>
+- 11 reputed essays ***(dispt)*** <br>
+<br>
+2. The following formula calculates the percentage of occurrences of each word in an essay, and the values are in the seventy remaining features.<br>
+(The number of occurrences of the word in an essay / the total number of word counts in an essay) * 100 <br>
+
+```{r}
+head(paper, 5)
+```
+
+This is how the paper looks like. <br>
+
+### Handle Missing Values
+
+```{r}
+nrow(paper[is.na(paper),])
+# paper <- na.omit(paper)
+```
+
+There is no missing value in all features in the paper dataset, which makes the analysis more convenient.
+
+### Select the required data
+```{r}
+paper_unlabeled <- paper[paper$author != "Jay",]
+nrow(paper_unlabeled)
+```
+
+Considering the goal (Defining the authorship of the 11 disputed essays between Hamilton and Madison), remove all essays written by Jay for improving the accuracy of the prediction. <br>
+<br>
+After removing Jay's essays, there remain 80 rows in the dataset.
+
+### Remove the labels
+
+```{r}
+paper_unlabeled <- paper_unlabeled[,c(-1:-2)]
+head(paper_unlabeled, 2)
+nrow(paper_unlabeled)
+```
+
+Make the dataset unlabeled by removing the label information (the author and file name columns) for building the clustering model.
+
+*****
+## Step 3 Model Training for Data
+
+### Normalize all numeric predictors
+
+```{r}
+paper_unlabeled <- scale(paper_unlabeled)
+nrow(paper_unlabeled)
+```
+
+Set all predictive variables in the same scale using Z-Scored Normalization.
+
+### Hierarchical Clustering Algorithms
+
+**hclust() function**<br>
+Compute the dissimilarity values (distances) with the dist() function and the method = "euclidean" parameter (Euclidean Distnace).
+```{r}
+d_paper <- dist(paper_unlabeled, method = "euclidean")
+```
+
+Feed the values into the **hclust()** function and specify the agglomeration method to be used. (i.e. complete, average, single, ward.D) After completed, draw the dendrogram of each result.<br>
+```{r}
+# assign method options vector
+method_options_hclust <- c("average", "single", "complete", "ward.D")
+
+i = 1
+# create a function to compute hclust with each method option and plot the dendrogram
+for (options in method_options_hclust) {
+  hc_paper_i <- hclust(d_paper, method = options)
+  plot(hc_paper_i, cex = 0.6, hang = -1)
+  rect.hclust(hc_paper_i, k=4, border = 2:5)
+  i <- i + 1
+}
+```
+
+As seen in the above dendrograms, the clusters on the plot with the ward.D method option can be distinguished visibly. Also, the clustering algorithm with the method = ward.D parameter can be the best optimization because the heights of each cluster in this model are the shortest among other method options.
+
+**agnes()**
+Compare the agglomerative coefficient of each method option to find the best for further analysis. 
+
+```{r}
+# assign the method option vectors
+method_options_agnes <- c( "average", "single", "complete", "ward")
+names(method_options_agnes) <- c( "average", "single", "complete", "ward")
+
+# create a list to store agglomerative coefficient
+ac.values <- vector(mode = "list", length = length(method_options_agnes))
+
+i = 1
+# function to calculate coefficient
+for (options in method_options_agnes) {
+  hc_ag_paper_i <- agnes(paper_unlabeled, method = options)
+  ac.values[i] <- hc_ag_paper_i$ac
+  pltree(hc_ag_paper_i, cex = 0.6, hang = -1, main = "Dendrogram of agnes")
+  rect.hclust(hc_ag_paper_i, k=4, border = 2:5)
+  i <- i + 1
+}
+
+names(ac.values) <- c( "average", "single", "complete", "ward")
+ac.values
+```
+
+The agglomerative coefficient with the method = ward parameter is the highest value, about 0.67. However, this value can't support the fact that this clustering model with this parameter has a strong structure because its coefficient is not extremely close to 1. <br>
+<br>
+In the dendrogram of the clustering model mentioned above, the boundaries of each cluster are clear, and its heights are the shortest value among other methods, which fulfills the goal of clustering, finding the minimum distance between clusters as the best. 
+
+### Divisive Hierarchical Clustering
+
+**1. diana()** <br>
+Find the heterogeneous clusters are divided from a single cluster, including all instances, to groups through iteration using the diana() function.
+
+```{r}
+hc_paper_d <- diana(paper_unlabeled)
+```
+
+calculate the coefficient of this divisive clustering.
+```{r}
+hc_paper_d$dc
+```
+
+Make a visualization of the results using a dendrogram. 
+```{r}
+pltree(hc_paper_d, cex = 0.6, hang = -1, main = "Dendrogram of diana")
+rect.hclust(hc_paper_d, k = 4, border = 2:5)
+```
+
+The clustering algorithm cannot be defined as a strong model because the coefficient of the divisive clustering algorithm is 0.4916942, not extremely close to 1. <br>
+<br>
+In addition, the red color cluster in the above dendrogram has the most instances, compared to other clusters. In other words, it can be said that all the objects aren't divided into the clusters in balance. 
+
+### Kmeans Clustering 
+**SimpleKMeans()** <br>
+The SimpleKMeans() function comes from the RWaka package and it doesn't care the type of data. 
+<br>
+
+```{r}
+model_rweka_paper <- SimpleKMeans(paper_unlabeled, control = Weka_control(N = 4, I = 500, S = 100))
+model_rweka_paper
+```
+However, it is difficult to interpret and visualize the clustering results. 
+<br>
+<br>
+**2. kmeans()**
+Instead, Find the clusters with the KMeans() function with the normalized dataset.<br>
+<br>
+In this case, set four centroids and 25 as the number of instances in each cluster. For the center parameter, there are four author groups: Hamilton, Madison, Hamilton & Madison, and the disputed essay. So, this number can be an initial value for the center parameter. 
+```{r}
+kmeans_paper <- kmeans(paper_unlabeled, centers = 4, nstart = 25)
+kmeans_paper
+```
+
+The first row indicates the number of instances in each cluster. We would say the 40 instances, which is half of the data, are in the third cluster. It is necessary to evaluate whether the model divided the data into clusters appropriately. <br>
+<br>
+Also, there is information on the centroids of each cluster, but the number of columns is too many. We need to find other approaches for the model evaluation.
+
+*****
+## Step 4 Evalaute Model Performance 
+
+### Hierarchical Clustering Algorithm
+Cut the tree into 4 groups and add the label information to the original dataset to evaluate the model performances. <br>
+
+**Agglomerative Clustering (hclust)** <br>
+```{r}
+# Compute the hclust again
+hc_paper_final <- hclust(d_paper, method = "ward.D2" )
+
+# Cut tree into 4 groups
+cluster_label <- cutree(hc_paper_final, k = 4)
+
+# Calculate the number of members in each cluster
+table(cluster_label)
+
+# Attach the labels to the original dataset
+paper_clustered_hclust <- cbind(paper_unlabeled, cluster_label)
+
+# Draw the dendrogram
+plot(hc_paper_final, cex = 0.6)
+rect.hclust(hc_paper_final, k=4, border = 2:5)
+
+# visualize the result in a scatter plot swith fviz_cluster()
+fviz_cluster(list(data = paper_unlabeled, cluster = cluster_label)) + theme_bw()
+```
+
+**2. Agglomerative Clustering (agnes)** <br>
+```{r}
+# Cut agnes() tree into 4 groups
+hc_paper_final_agnes <- agnes(paper_unlabeled, method = "ward")
+cluster_label_agnes <- cutree(as.hclust(hc_paper_final_agnes), k = 4)
+table(cluster_label_agnes)
+
+# Combine the label
+paper_clustered_agnes <- cbind(paper_unlabeled, cluster_label_agnes)
+
+# visualize the results with the fviz_dend
+fviz_dend(x = hc_paper_final_agnes, cex = 0.8, lwd = 0.8, k = 4, k_colors = c("red", "green3", "blue", "pink"), rect = TRUE, rect_border = "black")
+
+# Visualize the results with the fviz_cluster
+fviz_cluster(list(data = paper_unlabeled, cluster = cluster_label_agnes)) + theme_bw() 
+```
+
+### Divisible Clustering 
+**3. diana()**
+```{r}
+# Cut diana() tree into 4 groups
+hc_paper_final_diana <- diana(paper_unlabeled)
+cluster_label_diana <- cutree(as.hclust(hc_paper_final_diana), k = 4)
+table(cluster_label_diana)
+
+# Combine the label
+paper_clustered_diana <- cbind(paper_unlabeled,cluster_label_diana)
+
+# Visualize the results with the fviz_dend
+fviz_dend(x = hc_paper_final_diana, cex = 0.8, lwd = 0.8, k = 4, k_colors = c("red", "green3", "blue", "pink"), rect = TRUE, rect_border = "black", rect_fill = FALSE)
+
+# Visualize the results with the fviz_cluster
+fviz_cluster(list(data = paper_unlabeled, cluster = cluster_label_diana)) + theme_bw() 
+```
+First, the results from the hclust() and agnes() functions are the same. Second, we would say all the results from the hclust(), agnes(), and diana() functions don't have a strong structure of clustering.
+
+### kmeans
+Examine the number of examples falling in each group and check the usefulness of clusters using the size element from the kmeans class. 
+
+```{r}
+kmeans_paper$size
+```
+
+Compared to the results of the hierarchical clustering models, the number of instances of each cluster is in balance. (Note that this cannot mean a strong clustering structure.)
+
+*****
+## Step 5. Extract and evaluate the Results
+Apply all models we created to the original dataset.
+
+### Hierarchical Clustering Algorithms
+**1. hclust()**
+```{r}
+set.seed(123)
+# Cut tree into 4 groups
+hc_paper_final <- hclust(d_paper, method = "ward.D2")
+cluster_label <- cutree(hc_paper_final, k = 4)
+
+# Combine the label
+paper_clustered_hclust <- cbind(paper[paper$author != "Jay",], cluster_label)
+paper_clustered_hclust %>% group_by(cluster_label, author) %>% summarize(n = n())
+```
+According to the above table of clustering model with hclust(), the result that all disputed essays are included in the cluster 1. However, we can't conclude that this is 100% accurate, because there are both Hamilton and Madison elements in the cluster. 
+
+**2. agnes()**
+```{r}
+set.seed(123)
+# Cut agnes() tree into 4 groups
+hc_paper_final_agnes <- agnes(paper_unlabeled, method = "ward")
+cluster_label_agnes <- cutree(as.hclust(hc_paper_final_agnes), k = 4)
+
+# Combine the label
+paper_clustered_agnes <- cbind(paper[paper$author != "Jay",], cluster_label_agnes)
+paper_clustered_agnes %>% group_by(cluster_label_agnes, author) %>% summarize(n = n())
+```
+The cluster model using agnes() function shows the same result as the hclust() cluster model.
+
+### Divisible Clustering 
+**3. diana()**
+```{r}
+# Cut diana() tree into 4 groups
+set.seed(123)
+hc_paper_final_diana <- diana(paper_unlabeled)
+cluster_label_diana <- cutree(as.hclust(hc_paper_final_diana), k = 4)
+
+# Combine the label
+paper_clustered_diana <- cbind(paper[paper$author != "Jay",], cluster_label_diana)
+paper_clustered_diana %>% group_by(cluster_label_diana, author) %>% summarize(n = n())
+```
+In the above results, we cannot define the authorship of the disputed essays.
+ 
+### kmeans
+The cluster part of the cluster object is appended into the original dataset as a separate column.
+```{r}
+set.seed(123)
+paper_unlabeled_df <- as.data.frame(paper[paper$author != "Jay",])
+nrow(paper_unlabeled_df)
+paper_unlabeled_df$cluster <- kmeans_paper$cluster
+paper_unlabeled_df %>% group_by(cluster, author) %>% summarize(n = n())
+```
+As we can see the above table, we will make two conclusions. <br>
+1. One of the 11 disputed essays are written by Madison because it is in the cluster 1, which most elements are Madison's essays. <br>
+2. The authorship of the other essay cannot be defined. Even though it is possible to say the essay is written by Hamilton because there are 10 essays of Hamilton in the cluster, we cannot say this is 100% true considering that there are three essays written by both Hamilton and Madison in the same cluster. 
+
+
+*****
+
+### Conclusion
+<br>
+1. The purpose of this analysis is to find the author of each disputed essay (Hamilton or Madison). <br>
+- We used these algorithms: Hierarchical Clustering Algorithms with hclust() and agnes(), Divisive Clustering Algorithm with diana(), SimpleKMeans(), kmeans(). <br>
+2. The result of kmeans() would be acceptable and understandable. <br>
+- In conclusion, we would say one of the essays are written by Madison, while the others cannot be defined. 
+
+
+
