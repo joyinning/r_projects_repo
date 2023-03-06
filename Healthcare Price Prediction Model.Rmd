@@ -1,0 +1,1183 @@
+---
+title: "Healthcare Price Prediction Model"
+output: github_document
+---
+*****
+## SUMMARY
+This capstone project in one of the classes in my master program is about the prediction model related to the healthcare price. <br>
+<br>
+**1. Class Information and Duration** <br>
+- Class Information: IST 687 Introduction to Data Science at Syracuse University (Fall 2022) <br>
+- Duration: November ~ December 2022 <br>
+
+**2. Goal** <br>
+- To make the best prediction model on whether or not a customer will be expensive <br>
+- To deliver the results with shiny apps website <br>
+- To generate actionable insights for HMO on how to lwer the cost of healthcare <br>
+
+**3. Process (Based on the OESMN pipeline)** <br>
+- Data Cleaning <br>
+- Exploratory Data Analysis with Visualization <br>
+- Data Modeling (Prediction) <br>
+
+**4. Results** <br> 
+The prediction model simulation in Shiny Apps* [Link](https://haotianshen.shinyapps.io/FinalProj/?_ga=2.151311673.1694501232.1670083961-1568296780.1670083961) <br>
+- This model contains the following predictors and machine learning algorithm. <br>
+  - Predictors: age, bmi, smoker, exercise, expensive** <br>
+  - Algorithm: Decision Tree <br>
+  - Accuracy: 96.84% <br>
+  - Sensitivity: 98.11% <br>
+* The simulation require the train and test dataset as input. Find in the [Link]() <br>
+** The expensive predictor indicates whether or not the healthcare cost of each customer is expensive based on the boundary, $12,282. <br>
+
+**5. Business Suggestions** <br>
+- Only certain factors are needed to build a model with great sensitivity, and therefore the cost for collecting and processing the less significant data could be saved. <br>
+- Certain groups of people tend to be overcharged. Therefore, campaigns like smoking cessation programs (i.e. targeting smokers), regular yoga sessions (i.e. targeting less active group) could be initiated to promote healthy lifestyle. <Br>
+- Differences among States have brought our attention to how income level, tax, and socioeconomics statues might affect health cost. Our suggestion is that a nationwide standard to be set for maximum cost in healthcare. <br>
+
+*****
+
+## 1. Obtaining the Data
+### Group Member Information
+```{r}
+#NAMES: HAOTIAN SHEN, ENUBI KIM, WEI LIAO, RHIANNON ABRAMS
+```
+
+### Loading in the libraries we need.
+```{r}
+library(rio)
+library(kernlab)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(imputeTS)
+library(tidyverse)
+library(ggplot2)
+library(arules)
+library(ggmap)
+```
+
+## 2. Scrubbing and Cleaning the Data
+
+### Deal with missing data points
+```{r}
+# Download the dataset from url and check for the missing data.
+datafile <- "https://intro-datascience.s3.us-east-2.amazonaws.com/HMO_data.csv"
+df <- read.csv(datafile)
+sum(is.na(df$bmi))
+sum(is.na(df$hypertension))
+#Comment: There are 78 and 80 missing data points in bmi and hypertension respectively.
+
+df$bmi <- na_interpolation(df$bmi)
+df <- df %>% filter(!is.na(hypertension))
+```
+### Inspect the dataset
+```{r}
+str(df)
+summary(df)
+```
+**[Comments]**
+We are dealing with a data set with 7502 rows and 14 columns. Cost will be our predictive variables, while the other 12 attributes: age, bmi, number of children, smoker or not, locations, education level, exercise yearly or not, married or not, hypertension or not, gender could be our predictors.
+
+### Perform binning and transformation on our variables
+```{r}
+#1. age
+df_add_age <- df %>% mutate(age_group = case_when(
+  df$age < 20 ~ "under 18",
+  df$age >= 20 & df$age < 30 ~ "20-29",
+  df$age >= 30 & df$age < 40 ~ "30-39",
+  df$age >= 40 & df$age < 50 ~ "40-49",
+  df$age >= 50 & df$age < 60 ~ "50-59",
+  df$age >= 60 ~ 'over 60'
+))
+
+#2. bmi
+df_add_bmi <- df_add_age %>% mutate(bmi_group = case_when(
+  df_add_age$bmi < 18.5 ~ "Underweight",
+  df_add_age$bmi >= 18.5 & df_add_age$bmi < 24.9 ~ "Normal Weight",
+  df_add_age$bmi >= 24.9 & df_add_age$bmi < 29.9 ~ "Overweight",
+  df_add_age$bmi >= 29.9 ~ "Obesity"
+))
+df_new <- df_add_bmi
+
+# Adding new logical (binary) label of some categorical variables
+# 1. Education_level - is_educated (yes, no)
+df_add_edu_bin <- df_new %>% mutate(is_educated = case_when(
+  df_new$education_level != "No College Degree" ~ "yes",
+  TRUE ~ "no"
+))
+
+
+#2. children  - have_child (yes, no)
+df_add_child_bin <- df_add_edu_bin %>% mutate(have_child = case_when(
+  df_add_edu_bin$children == 0 ~ "no",
+  TRUE ~ "yes"
+))
+
+df_new <- df_add_child_bin
+df_new$hypertension <- ifelse(df_new$hypertension==1, 'yes', 'no')
+head(df_new)
+```
+### Set the boundary for expensive and not expensive
+```{r}
+mean(df_new$cost) # Average cost is 4049.5
+range(df_new$cost) # (2, 55715) 
+quantile(df_new$cost, probs = 0.8) # 80% people spend less than or equal to 5789.4
+ggplot(df_new,aes(x=cost))+geom_histogram(bins=100) #The cost has long-tailed effects on the right.
+
+#Expensive means a person spends more than 6000 N(included) on his/her health
+df_new$Expensive <- ifelse(df_new$cost >= 6000, 'yes', 'no')
+```
+**[Comments]** <br>
+We set the boundary for expensive or not to be 6000. People who were charged more than 6000 dollars will be labeled as "expensive", while people who paid less will be labeled as "not expensive".
+
+## 3. Explring and Visualizing the Data
+### Bar charts
+```{r}
+ggplot(df_new, aes(fill= Expensive, x = age_group)) + geom_bar(position = "fill")
+ggplot(df_new, aes(fill= Expensive, x = bmi_group)) + geom_bar(position = "fill")
+ggplot(df_new, aes(fill= Expensive, x = is_educated)) + geom_bar(position = "fill")
+ggplot(df_new, aes(fill= Expensive, x = have_child)) + geom_bar(position = "fill")
+ggplot(df_new, aes(fill= Expensive, x = smoker)) + geom_bar(position = "fill")
+ggplot(df_new, aes(fill= Expensive, x = location_type)) + geom_bar(position = "fill")
+ggplot(df_new, aes(fill= Expensive, x = yearly_physical)) + geom_bar(position = "fill")
+ggplot(df_new, aes(fill= Expensive, x = exercise)) + geom_bar(position = "fill")
+ggplot(df_new, aes(fill= Expensive, x = married)) + geom_bar(position = "fill")
+ggplot(df_new, aes(fill= Expensive, x = hypertension)) + geom_bar(position = "fill")
+ggplot(df_new, aes(fill= Expensive, x = gender)) + geom_bar(position = "fill")
+
+```
+**[Comments]** <br>
+All the bar charts demonstrate that the percentages of people paying more than 6000 can vary among different groups.They gave us a general ideas on which attribute might be valid predictor. For example, for people who are smokers, the percentage of people paying more than 6000 is significantly higher vs people who are not smokers. However, the differences in percentage is not that significant for people have children vs doesn't, educated vs not educated, live in country or urban, yearly_physical or not, married or not. <br>
+<br>
+Next, we will look at the attributes independently to get more insights.
+
+### 1. age
+```{r}
+# histogram
+ggplot(df_new, aes(age, fill=Expensive)) + geom_histogram() + theme_classic()
+```
+
+**[Comments]** <br>
+1. According to the above histogram, the age of most people in the data set is under 20. <br>
+2. [Expensive - No] The distribution of this group shows a multimodal shape and a peak in the under-20 categories. <br>
+3. [Expensive - Yes] As seen in the green area, we would say that the older a person is, the more he/she will pay for healthcare. <br>
+
+```{r}
+# grouping (age_group ~ number of observation)
+# table
+age_group <- df_new %>% 
+  group_by(age_group, Expensive) %>% 
+  summarise(count=n(), mean=mean(age), var=var(age), sd=sd(age)) %>%
+  arrange(Expensive)
+colnames(age_group)[3] <- "count"
+age_group <- age_group %>% mutate(prop = round(count/7502, 3)) 
+age_group
+
+# plot
+ggplot(age_group, aes(age_group, count, fill=factor(Expensive))) + 
+  geom_bar(stat="identity", position=position_stack()) + 
+  theme_classic() +
+  theme(legend.position = "top") + 
+  geom_text(aes(label=paste(count,"(",prop*100, "%)")), size = 3, position = position_stack(0.5))
+```
+**[Comments]** <br>
+The table and bar chart shows the detailed statistical results of two groups (high and low cost) in terms of age. <br>
+1. The age group under 50 accounts for more than half of the entire population in the data set. <br>
+2. [Expensive - No] Among the people who pay fewer costs for healthcare, the 20-29 age group has the highest proportion of the whole population. <br>
+3. [Expensive - Yes] There are most people in the 40-49 age group with the highest healthcare cost. <br>
+
+```{r}
+# grouping (age_group ~ cost)
+# table
+age_group_cost <- df_new %>% 
+                    group_by(age_group, Expensive) %>% 
+                    summarise(total=sum(cost), mean=mean(cost), max=max(cost), min=min(cost), var=var(cost), sd=sd(cost)) %>%
+  arrange(Expensive)
+age_group_cost <- age_group_cost %>% mutate(prop = round(total/30379292 ,3))
+age_group_cost
+
+# plot
+ggplot(age_group_cost, aes(age_group, total, fill=factor(Expensive))) + 
+  geom_bar(stat="identity", position=position_stack()) + 
+  theme(legend.position = "top") + 
+  theme_classic() +
+  geom_text(aes(label=paste(round(total, 0),"(",prop*100, "%)")), size = 3, position = position_stack(0.5)) +
+  scale_y_continuous(labels = scales::comma)
+```
+**[Comments]** <br>
+Unlike the above results, as we consider the cost data together, the age group between 40~59 spent a lot of money on their health care. <br>
+1) [Overall] The age group 40-49 has the highest total costs and proportion in the entire population. <br>
+2) [Expensive - Yes] Among the people with lower healthcare costs, the proportion and total value of the age group 40-49 are the highest with $4,919,178 (16.2%). <br>
+3) [Expensive - No] The age group 50-59 pay the highest costs for healthcare services. ($3,694,369 - 12.2%) <br>
+
+
+```{r}
+# box plot 
+# without outlier 
+ggplot(df_new, aes(age_group, cost, fill=Expensive)) + 
+  geom_boxplot(outlier.shape=NA) +
+  theme_classic() +
+  scale_y_continuous(labels=scales::comma)
+
+# box plot
+# with outlier
+ggplot(df_new, aes(age_group, cost, fill=Expensive)) + 
+  geom_boxplot(outlier.colour="red", outlier.shape=1, outlier.size=2) +
+  theme_classic() +
+  scale_y_continuous(labels=scales::comma)
+```
+**[Comments]** <br>
+The boxplots are made using the age_group and cost columns. <br>
+1) As seen in the box plot with the outliers, we can find the outliers of $55,715 on the age group over 60 with the higher healthcare cost. <br>
+2) We can also figure out that the age group 50-59 has many outliers in the boxplot with outliers. <br>
+3) Without the outliers, the boxplots of each 'Expensive' group show similar shapes. The 'Expensive - yes' group has a more variable range of values than the 'Expensive - no' group in terms of healthcare costs. <br>
+4) There are also outliers in the groups: the age group 20-29, 30-39, and under 18 with expensive healthcare cost. <br>
+
+### 2. bmi
+```{r}
+# histogram
+ggplot(df_new, aes(bmi, fill=Expensive)) + geom_histogram() + theme_classic()
+```
+
+**[Comments]** <br>
+1. The histogram of the overall population in the bmi column shows a normal distribution (a bell shape). <br>
+2. [Expensive - No] The distribution with a red color has a bell shape, so we would conclude this is a normal distribution. <Br>
+3. [Expensive - Yes] As seen in the green area, the shape of this histogram has a right-skewed shape. That means the data would have a higher bmi value than the 'Expensive - yes' group. <br>
+
+
+```{r}
+# grouping (bmi_group ~ number of observation)
+# table
+bmi_group <- df_new %>% 
+  group_by(bmi_group, Expensive) %>% 
+  summarise(count=n(), mean=mean(age), var=var(age), sd=sd(age)) %>%
+  arrange(Expensive)
+colnames(bmi_group)[3] <- "count"
+bmi_group <- bmi_group %>% mutate(prop = round(count/7502, 3)) 
+bmi_group
+
+# plot
+ggplot(bmi_group, aes(bmi_group, count, fill=factor(Expensive))) + 
+  geom_bar(stat="identity", position=position_stack()) + 
+  theme_classic() +
+  theme(legend.position = "top") + 
+  geom_text(aes(label=paste(count,"(",prop*100, "%)")), size = 3, position = position_stack(0.5))
+```
+
+**[Comments]** <br>
+The table and bar chart shows the detailed statistical results of two groups (high and low cost) in terms of bmi. <br>
+1. [Overall, Expensive - No] In the data set, people who are in 'Obesity' account for most of the population. We would say these people spent fewer costs on their healthcare. <br>
+2. [Expensive - Yes] People who are overweight may pay more costs for healthcare because the red area represents that there are 1,866 people (It accounts for 24.9% of the population) <br>
+
+
+```{r}
+# grouping (bmi_group ~ cost)
+# table
+bmi_group_cost <- df_new %>% 
+                    group_by(bmi_group, Expensive) %>% 
+                    summarise(total=sum(cost), mean=mean(cost), max=max(cost), min=min(cost), var=var(cost), sd=sd(cost)) %>%
+  arrange(Expensive)
+bmi_group_cost <- bmi_group_cost %>% mutate(prop = round(total/30379292 ,3))
+bmi_group_cost
+
+# plot
+ggplot(bmi_group_cost, aes(bmi_group, total, fill=factor(Expensive))) + 
+  geom_bar(stat="identity", position=position_stack()) + 
+  theme(legend.position = "top") + 
+  theme_classic() +
+  geom_text(aes(label=paste(round(total, 0),"(",prop*100, "%)")), size = 3, position = position_stack(0.5)) +
+  scale_y_continuous(labels = scales::comma)
+```
+
+**[Comments]** <br>
+Unlike the above results, as we consider the cost data together, the people in the Obesity group with both low and high healthcare costs spent a lot of money on healthcare. These groups also have the highest proportion in terms of costs. <br>
+
+
+```{r}
+# box plot 
+# without outlier 
+ggplot(df_new, aes(bmi_group, cost, fill=Expensive)) + 
+  geom_boxplot(outlier.shape=NA) +
+  theme_classic() +
+  scale_y_continuous(labels=scales::comma)
+
+# box plot
+# with outlier
+ggplot(df_new, aes(bmi_group, cost, fill=Expensive)) + 
+  geom_boxplot(outlier.colour="red", outlier.shape=1, outlier.size=2) +
+  theme_classic() +
+  scale_y_continuous(labels=scales::comma)
+```
+**[Comments]** <br>
+According to the boxplots with and without outliers, the Obesity group has a wide range of healthcare cost data, and there are many outliers in the Expensive-yes category. <br>
+
+### 3. location_type
+
+```{r}
+# grouping (location_type ~ number of observations)
+# table
+location_type_group <- df_new %>% 
+  group_by(location_type, Expensive) %>% 
+  summarise(count=n(), mean=mean(age), var=var(age), sd=sd(age)) %>%
+  arrange(Expensive)
+colnames(location_type_group)[3] <- "count"
+location_type_group <- location_type_group %>% mutate(prop = round(count/7502, 3)) 
+location_type_group
+
+# plot
+ggplot(location_type_group, aes(location_type, count, fill=factor(Expensive))) + 
+  geom_bar(stat="identity", position=position_stack()) + 
+  theme_classic() +
+  theme(legend.position = "top") + 
+  geom_text(aes(label=paste(count,"(",prop*100, "%)")), size = 3, position = position_stack(0.5))
+```
+
+```{r}
+# grouping (location_type ~ cost)
+# table
+location_type_cost <- df_new %>% 
+                    group_by(location_type, Expensive) %>% 
+                    summarise(total=sum(cost), mean=mean(cost), max=max(cost), min=min(cost), var=var(cost), sd=sd(cost)) %>%
+  arrange(Expensive)
+location_type_cost <- location_type_cost %>% mutate(prop = round(total/30379292 ,3))
+location_type_cost
+
+# plot
+ggplot(location_type_cost, aes(location_type, total, fill=factor(Expensive))) + 
+  geom_bar(stat="identity", position=position_stack()) + 
+  theme(legend.position = "top") + 
+  theme_classic() +
+  geom_text(aes(label=paste(round(total, 0),"(",prop*100, "%)")), size = 3, position = position_stack(0.5)) +
+  scale_y_continuous(labels = scales::comma)
+```
+**[Comments]** <Br>
+The location_type variable has a categorical data type, so we couldn't draw a histogram. 
+The table and bar chart shows the detailed statistical results of two groups (high and low cost) in location_type categories.<br>
+1) In the data set, there are more people who live in urban areas in terms of both the number of observations and total healthcare costs. It accounts for almost 73-75% of the population.<br>
+
+```{r}
+# box plot 
+# without outlier 
+ggplot(df_new, aes(location_type, cost, fill=Expensive)) + 
+  geom_boxplot(outlier.shape=NA) +
+  theme_classic() +
+  scale_y_continuous(labels=scales::comma)
+
+# box plot
+# with outlier
+ggplot(df_new, aes(location_type, cost, fill=Expensive)) + 
+  geom_boxplot(outlier.colour="red", outlier.shape=1, outlier.size=2) +
+  theme_classic() +
+  scale_y_continuous(labels=scales::comma)
+```
+**[Comments]** <br>
+The boxplots that made by the location_type and cost columns for the 'Expensive-Yes' group has many outliers. Considering healthcare costs, the boxplots of both country and the urban group have almost similar shapes. <br>
+
+### 4. exercise
+
+```{r}
+# grouping (exercise ~ numer of observation)
+# table
+exericse_group <- df_new %>% 
+  group_by(exercise, Expensive) %>% 
+  summarise(count=n(), mean=mean(age), var=var(age), sd=sd(age)) %>%
+  arrange(Expensive)
+colnames(exericse_group)[3] <- "count"
+exericse_group <- exericse_group %>% mutate(prop = round(count/7502, 3)) 
+exericse_group
+
+# plot
+ggplot(exericse_group, aes(exercise, count, fill=factor(Expensive))) + 
+  geom_bar(stat="identity", position=position_stack()) + 
+  theme_classic() +
+  theme(legend.position = "top") + 
+  geom_text(aes(label=paste(count,"(",prop*100, "%)")), size = 3, position = position_stack(0.5))
+```
+
+
+```{r}
+# grouping (exercise ~ cost)
+# table
+exercise_group_cost <- df_new %>% 
+                    group_by(exercise, Expensive) %>% 
+                    summarise(total=sum(cost), mean=mean(cost), max=max(cost), min=min(cost), var=var(cost), sd=sd(cost)) %>%
+  arrange(Expensive)
+exercise_group_cost <- exercise_group_cost %>% mutate(prop = round(total/30379292 ,3))
+exercise_group_cost
+
+# plot
+ggplot(exercise_group_cost, aes(exercise, total, fill=factor(Expensive))) + 
+  geom_bar(stat="identity", position=position_stack()) + 
+  theme(legend.position = "top") + 
+  theme_classic() +
+  geom_text(aes(label=paste(round(total, 0),"(",prop*100, "%)")), size = 3, position = position_stack(0.5)) +
+  scale_y_continuous(labels = scales::comma)
+```
+**[Comments]** <br>
+The exercise variable has a categorical data type, so we couldn't draw a histogram. 
+The table and bar chart shows the detailed statistical results of two groups (high and low cost) in the exercise categories. <br>
+1) In the data set, the number of people who exercise regularly is more than the other group without working out. Also, they have a higher healthcare cost. It accounts for almost 84-85% of the population. <br>
+2) The interesting point is that even though there are more people who are not active and have a lower healthcare spending, the actual costs of the people who are not active and have a higher healthcare cost are higher than the other group. <br>
+
+
+```{r}
+# box plot 
+# without outlier 
+ggplot(df_new, aes(exercise, cost, fill=Expensive)) + 
+  geom_boxplot(outlier.shape=NA) +
+  theme_classic() +
+  scale_y_continuous(labels=scales::comma)
+
+# box plot
+# with outlier
+ggplot(df_new, aes(exercise, cost, fill=Expensive)) + 
+  geom_boxplot(outlier.colour="red", outlier.shape=1, outlier.size=2) +
+  theme_classic() +
+  scale_y_continuous(labels=scales::comma)
+```
+**[Comments]** <br>
+There are many outliers in the not-active and expensive - yes group. <br>
+
+
+### 5. smoker
+
+```{r}
+# grouping (smoker ~ numer of observation)
+# table
+smoker_group <- df_new %>% 
+  group_by(smoker, Expensive) %>% 
+  summarise(count=n(), mean=mean(age), var=var(age), sd=sd(age)) %>%
+  arrange(Expensive)
+colnames(smoker_group)[3] <- "count"
+smoker_group <- smoker_group %>% mutate(prop = round(count/7502, 3)) 
+smoker_group
+
+# plot
+ggplot(smoker_group, aes(smoker, count, fill=factor(Expensive))) + 
+  geom_bar(stat="identity", position=position_stack()) + 
+  theme_classic() +
+  theme(legend.position = "top") + 
+  geom_text(aes(label=paste(count,"(",prop*100, "%)")), size = 3, position = position_stack(0.5))
+```
+
+```{r}
+# grouping (smoker ~ cost)
+# table
+smoker_group_cost <- df_new %>% 
+                    group_by(smoker, Expensive) %>% 
+                    summarise(total=sum(cost), mean=mean(cost), max=max(cost), min=min(cost), var=var(cost), sd=sd(cost)) %>%
+  arrange(Expensive)
+smoker_group_cost <- smoker_group_cost %>% mutate(prop = round(total/30379292 ,3))
+smoker_group_cost
+
+# plot
+ggplot(smoker_group_cost, aes(smoker, total, fill=factor(Expensive))) + 
+  geom_bar(stat="identity", position=position_stack()) + 
+  theme(legend.position = "top") + 
+  theme_classic() +
+  geom_text(aes(label=paste(round(total, 0),"(",prop*100, "%)")), size = 3, position = position_stack(0.5)) +
+  scale_y_continuous(labels = scales::comma)
+```
+**[Comments]** <br>
+The smoker variable has a categorical data type, so we couldn't draw a histogram. 
+The table and bar chart shows the detailed statistical results of two groups (high and low cost) in the smoker categories. <br>
+1) In the data set, the number of people who smoke is more than the non-smoker group. It accounts for almost 84-85% of the population. <br>
+
+
+```{r}
+# box plot 
+# without outlier 
+ggplot(df_new, aes(smoker, cost, fill=Expensive)) + 
+  geom_boxplot(outlier.shape=NA) +
+  theme_classic() +
+  scale_y_continuous(labels=scales::comma)
+
+# box plot
+# with outlier
+ggplot(df_new, aes(smoker, cost, fill=Expensive)) + 
+  geom_boxplot(outlier.colour="red", outlier.shape=1, outlier.size=2) +
+  theme_classic() +
+  scale_y_continuous(labels=scales::comma)
+```
+**[Comments]** <br>
+There are many outliers in the smoker - yes and expensive - yes group. It also has a variable range of healthcare cost data. <br>
+
+
+### 6. yearly_physical
+
+```{r}
+# grouping (yearly_physical ~ numer of observation)
+# table
+yearly_physical_group <- df_new %>% 
+  group_by(yearly_physical, Expensive) %>% 
+  summarise(count=n(), mean=mean(age), var=var(age), sd=sd(age)) %>%
+  arrange(Expensive)
+colnames(yearly_physical_group)[3] <- "count"
+yearly_physical_group <- yearly_physical_group %>% mutate(prop = round(count/7502, 3)) 
+yearly_physical_group
+
+# plot
+ggplot(yearly_physical_group, aes(yearly_physical, count, fill=factor(Expensive))) + 
+  geom_bar(stat="identity", position=position_stack()) + 
+  theme_classic() +
+  theme(legend.position = "top") + 
+  geom_text(aes(label=paste(count,"(",prop*100, "%)")), size = 3, position = position_stack(0.5))
+```
+
+```{r}
+# grouping (yearly_physical ~ cost)
+# table
+yearly_physical_group_cost <- df_new %>% 
+                    group_by(yearly_physical, Expensive) %>% 
+                    summarise(total=sum(cost), mean=mean(cost), max=max(cost), min=min(cost), var=var(cost), sd=sd(cost)) %>%
+  arrange(Expensive)
+yearly_physical_group_cost <- yearly_physical_group_cost %>% mutate(prop = round(total/30379292 ,3))
+yearly_physical_group_cost
+
+# plot
+ggplot(yearly_physical_group_cost, aes(yearly_physical, total, fill=factor(Expensive))) + 
+  geom_bar(stat="identity", position=position_stack()) + 
+  theme(legend.position = "top") + 
+  theme_classic() +
+  geom_text(aes(label=paste(round(total, 0),"(",prop*100, "%)")), size = 3, position = position_stack(0.5)) +
+  scale_y_continuous(labels = scales::comma)
+```
+**[Comments]** <br>
+The table and bar chart shows the detailed statistical results of two groups (high and low cost) in the yearly_physical categories. <br>
+1) In the data set, there are more people who if the person had a well visit with	their doctor during	the	year in terms of both the number of observations and total healthcare costs. It accounts for almost 75% of the population. <br>
+2) The interesting point is that people who usually didn't see their doctor for a year have a higher healthcare cost. <br>
+
+
+```{r}
+# box plot 
+# without outlier 
+ggplot(df_new, aes(yearly_physical, cost, fill=Expensive)) + 
+  geom_boxplot(outlier.shape=NA) +
+  theme_classic() +
+  scale_y_continuous(labels=scales::comma)
+
+# box plot
+# with outlier
+ggplot(df_new, aes(yearly_physical, cost, fill=Expensive)) + 
+  geom_boxplot(outlier.colour="red", outlier.shape=1, outlier.size=2) +
+  theme_classic() +
+  scale_y_continuous(labels=scales::comma)
+```
+**[Comments]** <br>
+Even though the boxplots don't have a wider range of data on healthcare costs, there are many outliers in the expensive-yes group (green boxes). <br>
+
+
+### 7. gender
+
+```{r}
+# grouping (gender ~ numer of observation)
+# table
+gender_group <- df_new %>% 
+  group_by(gender, Expensive) %>% 
+  summarise(count=n(), mean=mean(age), var=var(age), sd=sd(age)) %>%
+  arrange(Expensive)
+colnames(gender_group)[3] <- "count"
+gender_group <- gender_group %>% mutate(prop = round(count/7502, 3)) 
+gender_group
+
+# plot
+ggplot(gender_group, aes(gender, count, fill=factor(Expensive))) + 
+  geom_bar(stat="identity", position=position_stack()) + 
+  theme_classic() +
+  theme(legend.position = "top") + 
+  geom_text(aes(label=paste(count,"(",prop*100, "%)")), size = 3, position = position_stack(0.5))
+```
+
+```{r}
+# grouping (gender ~ cost)
+# table
+gender_group_cost <- df_new %>% 
+                    group_by(gender, Expensive) %>% 
+                    summarise(total=sum(cost), mean=mean(cost), max=max(cost), min=min(cost), var=var(cost), sd=sd(cost)) %>%
+  arrange(Expensive)
+gender_group_cost <- gender_group_cost %>% mutate(prop = round(total/30379292 ,3))
+gender_group_cost
+
+# plot
+ggplot(gender_group_cost, aes(gender, total, fill=factor(Expensive))) + 
+  geom_bar(stat="identity", position=position_stack()) + 
+  theme(legend.position = "top") + 
+  theme_classic() +
+  geom_text(aes(label=paste(round(total, 0),"(",prop*100, "%)")), size = 3, position = position_stack(0.5)) +
+  scale_y_continuous(labels = scales::comma)
+```
+**[Comments]** <br>
+The table and bar chart shows the detailed statistical results of two groups (high and low cost) in terms of gender. <br>
+1. There is no significant difference between the number of observations in female and male groups. <br>
+2. However, in terms of healthcare cost, male has a higher healthcare cost than the female. <br>
+
+
+```{r}
+# box plot 
+# without outlier 
+ggplot(df_new, aes(gender, cost, fill=Expensive)) + 
+  geom_boxplot(outlier.shape=NA) +
+  theme_classic() +
+  scale_y_continuous(labels=scales::comma)
+
+# box plot
+# with outlier
+ggplot(df_new, aes(gender, cost, fill=Expensive)) + 
+  geom_boxplot(outlier.colour="red", outlier.shape=1, outlier.size=2) +
+  theme_classic() +
+  scale_y_continuous(labels=scales::comma)
+```
+**[Comments]** <br>
+There is no significant difference in both female and male boxplots with healthcare costs. <br>
+
+### 8. education_level - is_educated
+
+```{r}
+# grouping (education_level ~ numer of observation)
+# table
+education_level_group <- df_new %>% 
+  group_by(is_educated, Expensive) %>% 
+  summarise(count=n(), mean=mean(age), var=var(age), sd=sd(age)) %>%
+  arrange(Expensive)
+colnames(education_level_group)[3] <- "count"
+education_level_group <- education_level_group %>% mutate(prop = round(count/7502, 3)) 
+education_level_group
+
+# plot
+ggplot(education_level_group, aes(is_educated, count, fill=factor(Expensive))) + 
+  geom_bar(stat="identity", position=position_stack()) + 
+  theme_classic() +
+  theme(legend.position = "top") + 
+  geom_text(aes(label=paste(count,"(",prop*100, "%)")), size = 3, position = position_stack(0.5))
+```
+
+```{r}
+# grouping (education_level ~ cost)
+# table
+education_level_group_cost <- df_new %>% 
+                    group_by(is_educated, Expensive) %>% 
+                    summarise(total=sum(cost), mean=mean(cost), max=max(cost), min=min(cost), var=var(cost), sd=sd(cost)) %>%
+  arrange(Expensive)
+education_level_group_cost <- education_level_group_cost %>% mutate(prop = round(total/30379292 ,3))
+education_level_group_cost
+
+# plot
+ggplot(education_level_group_cost, aes(is_educated, total, fill=factor(Expensive))) + 
+  geom_bar(stat="identity", position=position_stack()) + 
+  theme(legend.position = "top") + 
+  theme_classic() +
+  geom_text(aes(label=paste(round(total, 0),"(",prop*100, "%)")), size = 3, position = position_stack(0.5)) +
+  scale_y_continuous(labels = scales::comma)
+```
+**[Comments]** <br>
+The table and bar chart shows the detailed statistical results of two groups (high and low cost) considering whether a person has a college degree or not. <br>
+The interesting point is that people with a college degree have a higher healthcare cost than other people without an education degree. <br>
+
+
+```{r}
+# box plot 
+# without outlier 
+ggplot(df_new, aes(is_educated, cost, fill=Expensive)) + 
+  geom_boxplot(outlier.shape=NA) +
+  theme_classic() +
+  scale_y_continuous(labels=scales::comma)
+
+# box plot
+# with outlier
+ggplot(df_new, aes(is_educated, cost, fill=Expensive)) + 
+  geom_boxplot(outlier.colour="red", outlier.shape=1, outlier.size=2) +
+  theme_classic() +
+  scale_y_continuous(labels=scales::comma)
+```
+**[Comments]** <br>
+There are more outliers in the is_educated - yes and expensive - yes group than is_educated - no and expensive - yes group. <br>
+
+
+### 9. married
+
+```{r}
+# grouping (married ~ numer of observation)
+# table
+married_group <- df_new %>% 
+  group_by(married, Expensive) %>% 
+  summarise(count=n(), mean=mean(age), var=var(age), sd=sd(age)) %>%
+  arrange(Expensive)
+colnames(married_group)[3] <- "count"
+married_group <- married_group %>% mutate(prop = round(count/7502, 3)) 
+married_group
+
+# plot
+ggplot(married_group, aes(married, count, fill=factor(Expensive))) + 
+  geom_bar(stat="identity", position=position_stack()) + 
+  theme_classic() +
+  theme(legend.position = "top") + 
+  geom_text(aes(label=paste(count,"(",prop*100, "%)")), size = 3, position = position_stack(0.5))
+```
+
+```{r}
+# grouping (married ~ cost)
+# table
+married_group_cost <- df_new %>% 
+                    group_by(married, Expensive) %>% 
+                    summarise(total=sum(cost), mean=mean(cost), max=max(cost), min=min(cost), var=var(cost), sd=sd(cost)) %>%
+  arrange(Expensive)
+married_group_cost <- married_group_cost %>% mutate(prop = round(total/30379292 ,3))
+married_group_cost
+
+# plot
+ggplot(married_group_cost, aes(married, total, fill=factor(Expensive))) + 
+  geom_bar(stat="identity", position=position_stack()) + 
+  theme(legend.position = "top") + 
+  theme_classic() +
+  geom_text(aes(label=paste(round(total, 0),"(",prop*100, "%)")), size = 3, position = position_stack(0.5)) +
+  scale_y_continuous(labels = scales::comma)
+```
+**[Comments]** <br>
+The table and bar chart represents the detailed statistical results of two groups (high and low cost) considering whether a person gets married or not. <br>
+Both bar plots show that more people are married in the data set, and they have a higher cost than the other people who are not married. <br>
+
+```{r}
+# box plot 
+# without outlier 
+ggplot(df_new, aes(married, cost, fill=Expensive)) + 
+  geom_boxplot(outlier.shape=NA) +
+  theme_classic() +
+  scale_y_continuous(labels=scales::comma)
+
+# box plot
+# with outlier
+ggplot(df_new, aes(married, cost, fill=Expensive)) + 
+  geom_boxplot(outlier.colour="red", outlier.shape=1, outlier.size=2) +
+  theme_classic() +
+  scale_y_continuous(labels=scales::comma)
+```
+**[Comments]** <br>
+1) As seen in the box plot with the outliers, we can find the outliers of $55,715 on the not_married group with the higher healthcare cost. <br>
+
+
+### 10. number of children - have_child
+
+```{r}
+# grouping (num of children ~ numer of observation)
+# table
+children_group <- df_new %>% 
+  group_by(have_child, Expensive) %>% 
+  summarise(count=n(), mean=mean(age), var=var(age), sd=sd(age)) %>%
+  arrange(Expensive)
+colnames(children_group)[3] <- "count"
+children_group <- children_group %>% mutate(prop = round(count/7502, 3)) 
+children_group
+
+# plot
+ggplot(children_group, aes(have_child, count, fill=factor(Expensive))) + 
+  geom_bar(stat="identity", position=position_stack()) + 
+  theme_classic() +
+  theme(legend.position = "top") + 
+  geom_text(aes(label=paste(count,"(",prop*100, "%)")), size = 3, position = position_stack(0.5))
+```
+
+```{r}
+# grouping (num of children ~ cost)
+# table
+children_group_cost <- df_new %>% 
+                    group_by(have_child, Expensive) %>% 
+                    summarise(total=sum(cost), mean=mean(cost), max=max(cost), min=min(cost), var=var(cost), sd=sd(cost)) %>%
+  arrange(Expensive)
+children_group_cost <- children_group_cost %>% mutate(prop = round(total/30379292 ,3))
+children_group_cost
+
+# plot
+ggplot(children_group_cost, aes(have_child, total, fill=factor(Expensive))) + 
+  geom_bar(stat="identity", position=position_stack()) + 
+  theme(legend.position = "top") + 
+  theme_classic() +
+  geom_text(aes(label=paste(round(total, 0),"(",prop*100, "%)")), size = 3, position = position_stack(0.5)) +
+  scale_y_continuous(labels = scales::comma)
+```
+**[Comments]** <br>
+The table and bar chart shows the detailed statistical results of two groups (high and low cost) considering whether a person has a child. <br>
+Both bar plots show that more people have at least one child and they have a higher cost than the other people who don't have a child. <br>
+
+```{r}
+# box plot 
+# without outlier 
+ggplot(df_new, aes(have_child, cost, fill=Expensive)) + 
+  geom_boxplot(outlier.shape=NA) +
+  theme_classic() +
+  scale_y_continuous(labels=scales::comma)
+
+# box plot
+# with outlier
+ggplot(df_new, aes(have_child, cost, fill=Expensive)) + 
+  geom_boxplot(outlier.colour="red", outlier.shape=1, outlier.size=2) +
+  theme_classic() +
+  scale_y_continuous(labels=scales::comma)
+```
+
+
+### 11. mappings
+To future investigate the cost in different locations, we created map that summarizes the number of people paying more than 6000.
+```{r}
+# Create the US map
+states <- map_data("state")
+bb <- c(left = min(states$long),
+bottom = min(states$lat),
+right = max(states$long),
+top = max(states$lat)) # set limitations of the map
+map <- get_stamenmap(bbox = bb, zoom = 4)
+
+# Show the map of people who are expensive based on their state
+df_by_state <- df_new %>% group_by(location,Expensive) %>% summarise(n = n())
+df_by_state$State <- tolower(df_by_state$location)
+df_by_state_yes <- filter(df_by_state, Expensive == 'yes')
+dfMap <- merge(df_by_state_yes, states, by.x = 'State', by.y = 'region')
+dfMap <- dfMap %>% arrange(order)
+ggmap(map) + geom_polygon(data = dfMap, color = "black", alpha = 0.8, aes(x = long, y = lat, group = group, fill = n))
+```
+**[Comments]** <br>
+The map shows clearly that PENNSYLVANIA have more people paying more than 6000 on their health. 
+
+```{r}
+#Show the percentage of people pay more than 6000 in us by state
+df_temp <- df_new %>% group_by(location) %>% summarise(n = n())
+df_by_state <- df_new %>% group_by(location,Expensive) %>% summarise(n = n())
+df_by_state$State <- tolower(df_by_state$location)
+df_by_state_yes <- filter(df_by_state, Expensive == 'yes')
+df_by_state_yes$percentage <- df_by_state_yes$n / df_temp$n
+dfMap <- merge(df_by_state_yes, states, by.x = 'State', by.y = 'region')
+dfMap <- dfMap %>% arrange(order)
+ggmap(map) + geom_polygon(data = dfMap, color = "black", alpha = 0.8, aes(x = long, y = lat, group = group, fill = percentage))
+```
+**[Comments]** <br>
+The map shows clearly that people who live on New York have higher chances of paying more than 6000 on their health.
+Both of the maps indicate that which state people live in might make a difference.
+
+## 4. Modeling
+### Linear Model
+```{r}
+#1)linear model
+#Building linear model using numeric predictors
+#visualize the relationship between each predictor and cost
+ggplot(data=df_new,aes(x=age, y=cost))+geom_point()
+ggplot(data=df_new,aes(x=bmi, y=cost))+geom_point()
+ggplot(data=df_new,aes(x=children, y=cost))+geom_point()
+
+#Build a multiple regression model using age, bmi and number of children
+lmOut <- lm(cost~age+bmi+children, data=df)
+summary(lmOut)
+#Comment : Although all of the predictors in this case are significant, the model only explains 15.69% of the dataset, which is quite low.However, we will further use cross validation to test the model's accuracy and sensitivity.
+
+#Divide the data into training and testing dataset for lm
+set.seed(1)
+trainList <- createDataPartition(y=df$cost, p=.70, list=FALSE)
+trainData <- df[trainList,]
+testData <- df[-trainList,]
+lmOut2 <- lm(cost~age+bmi+children, data=trainData)
+lmPred <- predict(lmOut2, newdata=testData)
+
+#getting our confusion matrix for linear model
+PredictValues <- as.factor(ifelse(lmPred >= 6000, 'yes', 'no'))
+testData$Expensive <- as.factor(ifelse(testData$cost >= 6000, 'yes', 'no'))
+confusionMatrix(PredictValues,testData$Expensive)
+
+```
+**[Comments]** <br>
+As we can see, the sensitivity here is 0.8705. The accuracy is below No Information Rate. The linear model is not a good model in general.
+
+### Decision Tree Model
+We then turn to more complicated machine learning models.
+
+```{r}
+#Decision tree model 1:
+#Use all the predictors(exclude location) to construct a decision tree model
+dfX <- data.frame(age = (df_new$age),
+                 bmi = (df_new$bmi),
+                 education = (df_new$education_level),
+                 children = (df_new$children),
+                 smoker = (df_new$smoker),
+                 location = (df_new$location),
+                 location_type = (df_new$location_type),
+                 yearly_physical = (df_new$yearly_physical),
+                 exercise = (df_new$exercise),
+                 married = (df_new$married),
+                 hypertension = (df_new$hypertension),
+                 gender = (df_new$gender),
+                 Expensive = (df_new$Expensive))
+
+#Divide dataframe into train set and test set
+set.seed(250)
+trainList <- createDataPartition(y=dfX$Expensive, p=0.70, list=FALSE)
+trainSet <- dfX[trainList,]
+testSet <- dfX[-trainList,]
+# Define train control factors, use repeatedcv for 10 times
+trctrl <- trainControl(method = "repeatedcv", number = 10)
+
+
+#Build rpart tree model
+tree_model1 <- train(Expensive~., data = trainSet, method = 'rpart', trControl=trctrl, tuneLength = 10)
+rpart.plot(tree_model1$finalModel)
+```
+
+```{r}
+#test our tree model 1 on test set:
+treePred1 <- predict(tree_model1, newdata = testSet)
+confusionMatrix(treePred1, as.factor(testSet$Expensive))
+```
+**[Comments]** <br>
+As we can see, the sensitivity is 0.9714, which has been significantly improved compared with linear model.The accuracy is also higher than No Information Rate. <br>
+Considering the cost of that putting all predictors into a business model is high, as well as there will be problems in overfitting, we are looking for ways to simplify the model by turning numeric variables into categorical variables and hoping to see the changes in performances.
+
+```{r}
+#Decision tree model 2:
+#Turning numeric variables into categorical ones
+dfX2 <- data.frame(age_group = as.factor(df_new$age_group),
+                 bmi_group = as.factor(df_new$bmi_group),
+                 is_educated = as.factor(df_new$is_educated),
+                 have_child = as.factor(df_new$have_child),
+                 smoker = as.factor(df_new$smoker),
+                 location = as.factor(df_new$location),
+                 location_type = as.factor(df_new$location_type),
+                 yearly_physical = as.factor(df_new$yearly_physical),
+                 exercise = as.factor(df_new$exercise),
+                 married = as.factor(df_new$married),
+                 hypertension = as.factor(df_new$hypertension),
+                 gender = as.factor(df_new$gender),
+                 Expensive = as.factor(df_new$Expensive))
+
+#Divide dataframe into train set and test set
+set.seed(250)
+trainList <- createDataPartition(y=dfX2$Expensive, p=0.70, list=FALSE)
+trainSet <- dfX2[trainList,]
+testSet <- dfX2[-trainList,]
+# Define train control factors, use repeatedcv for 10 times
+trctrl <- trainControl(method = "repeatedcv", number = 10)
+
+
+#Build rpart tree model
+tree_model2 <- train(Expensive~., data = trainSet, method = 'rpart', trControl=trctrl, tuneLength = 10)
+rpart.plot(tree_model2$finalModel)
+
+```
+```{r}
+#test out tree model 2 on test set
+treePred2 <- predict(tree_model2, newdata = testSet)
+confusionMatrix(treePred2, as.factor(testSet$Expensive))
+```
+**[Comments]** <br>
+The sensitivity rate goes up to 0.9725 when we simplified some of our predictors and the accuracy was significantly improved compared to No Information Rate. Binning all the numeric variables improve the performance of our tree model. <br>
+Furthermore, we can also rule out some of the predictors that are less important in the tree model to make it more general.
+
+
+```{r}
+#Decision Tree Model 3: Predictor Selection
+varImp(tree_model2)
+#We then excluded some of the predictors that are less important according the the result
+
+trainSet <- select(trainSet, -gender, -have_child, -hypertension, -yearly_physical, -location_type, -married, -is_educated)
+tree_model3 <- train(Expensive~., data = trainSet, method = 'rpart', trControl=trctrl, tuneLength = 10)
+rpart.plot(tree_model3$finalModel)
+
+```
+```{r}
+#test out tree model 3 on test set
+treePred3 <- predict(tree_model3, newdata = testSet)
+confusionMatrix(treePred3, as.factor(testSet$Expensive))
+#Comment: The sensitivity rate goes up to 0.9758 with selected predictors.
+```
+**[Comments]** <br>
+The sensitivity rate goes up to 9758 when we simplified some of our predictors. This is the best performing decision tree model we have so far. <br>
+
+### SVM Model
+Apart from decision tree, support vector machine is also a good machine learning technique in supervised learning. We use the same process with decision trees and compare the performances between each model. <br>
+First, we included all the predictors as they were without transferring numeric ones into categorical ones.
+
+```{r}
+#SVM Model 1
+#Divide dataframe into train set and test set
+set.seed(250)
+trainList <- createDataPartition(y=dfX$Expensive, p=0.70, list=FALSE)
+trainSet <- dfX[trainList,]
+testSet <- dfX[-trainList,]
+# Define train control factors, use repeatedcv for 10 times
+trctrl <- trainControl(method = "repeatedcv", number = 10)
+svm_model1 <- train(Expensive~., data = trainSet, method = "svmRadial",trCotrol=trctrl, preProc=c("center","scale")) 
+```
+
+
+```{r}
+#test out svm model 1 on test data
+svmPred1 <- predict(svm_model1, newdata = testSet)
+confusionMatrix(svmPred1, as.factor(testSet$Expensive))
+```
+
+**[Comments]** <br>
+The sensitivity rate is 0.9686 and the accuracy is 89.91%. However, it's not better than the best performing decision tree model. <br>
+We then used binning techniques to see if the performance improved.
+
+```{r}
+#SVM Model 2
+#Divide dataframe into train set and test set
+set.seed(250)
+trainList <- createDataPartition(y=dfX2$Expensive, p=0.70, list=FALSE)
+trainSet <- dfX2[trainList,]
+testSet <- dfX2[-trainList,]
+# Define train control factors, use repeatedcv for 10 times
+trctrl <- trainControl(method = "repeatedcv", number = 10)
+svm_model2 <- train(Expensive~., data = trainSet, method = "svmRadial",trCotrol=trctrl, preProc=c("center","scale")) 
+```
+
+```{r}
+#test out svm model 2 on test data
+svmPred2 <- predict(svm_model2, newdata = testSet)
+confusionMatrix(svmPred2, as.factor(testSet$Expensive))
+#The sensitivity rate is 0.9763 , which is less than the best performing decision tree model.
+```
+**[Comments]** <br>
+We saw improvements in both sensitivity and accuracy. However, it's not better than the best performing decision tree model.
+
+
+### Associate Mining
+```{r}
+#We can also use associate mining here to see the importance of each variable.
+df_tran <- as(dfX2,"transactions")
+rules <- apriori(dfX2, parameter=list(supp=0.05, conf=0.8),
+                 control=list(verbose=F),
+                 appearance=list(default="lhs",rhs=("Expensive=yes")))
+inspect(sort(rules, by="support"))
+
+```
+**[Comments]** <br>
+The most supported association here indicated that expensiveness relates to bmi and smoker.
+
+### Further Exploration with Unsupervised Machine Learning
+Since we manually picked the boundary for determining expensive or not, we now used unsupervised learning and performed k-means clustering to get more insights on cost.
+According to associate mining and the bar graph, bmi might be a most significant predictor of cost. We used bmi and cost to create clusters.
+
+```{r}
+df_kmeans <- select(df_new,bmi,cost)
+```
+
+```{r}
+set.seed(250)
+kmeans_model <- kmeans(df_kmeans,5, iter.max = 10, nstart = 1)
+```
+
+```{r}
+
+plot(df_kmeans, col = kmeans_model$cluster)
+aggregate(df_kmeans, by=list(cluster=kmeans_model$cluster), mean)
+dd <- cbind(df_kmeans, cluster = kmeans_model$cluster)
+lowest_cost_cluster_2 <- dd %>% filter(cluster==2) %>% arrange(by=cost) %>% head(1)
+lowest_cost_cluster_2
+```
+**[Comments]** <br>
+When we divided the cost into five groups, the lowest cost of the first cluster at the top could be considered as the boundary. We then changed the boundary to 12282 and tested it out with the tree models we have.
+
+```{r}
+#Decision Tree Model 2
+df_new$Expensive <- ifelse(df_new$cost >= 12282, 'yes', 'no')
+
+dfX2 <- data.frame(age_group = as.factor(df_new$age_group),
+                 bmi_group = as.factor(df_new$bmi_group),
+                 is_educated = as.factor(df_new$is_educated),
+                 have_child = as.factor(df_new$have_child),
+                 smoker = as.factor(df_new$smoker),
+                 location = as.factor(df_new$location),
+                 location_type = as.factor(df_new$location_type),
+                 yearly_physical = as.factor(df_new$yearly_physical),
+                 exercise = as.factor(df_new$exercise),
+                 married = as.factor(df_new$married),
+                 hypertension = as.factor(df_new$hypertension),
+                 gender = as.factor(df_new$gender),
+                 Expensive = as.factor(df_new$Expensive))
+
+#Divide dataframe into train set and test set
+set.seed(250)
+trainList <- createDataPartition(y=dfX2$Expensive, p=0.70, list=FALSE)
+trainSet <- dfX2[trainList,]
+testSet <- dfX2[-trainList,]
+# Define train control factors, use repeatedcv for 10 times
+trctrl <- trainControl(method = "repeatedcv", number = 10)
+
+
+#Build rpart tree model
+tree_model2 <- train(Expensive~., data = trainSet, method = 'rpart', trControl=trctrl, tuneLength = 10)
+rpart.plot(tree_model2$finalModel)
+
+#test out tree model 2 on test set
+treePred2 <- predict(tree_model2, newdata = testSet)
+confusionMatrix(treePred2, as.factor(testSet$Expensive))
+```
+**[Comments]** <br>
+After adjusting for the boundary, sensitivity and accuracy have improved for the same tree model 2. We would later go through the predictor selection again to get better performance.
+
+```{r}
+varImp(tree_model2)
+#There are only 20 out of 32 variables are important.We then excluded some of the predictors that are less important.
+```
+
+```{r}
+#Decision Tree Model 3
+trainSet <- select(trainSet, -gender, -have_child, -hypertension, -yearly_physical, -location_type, -married, -is_educated)
+tree_model3 <- train(Expensive~., data = trainSet, method = 'rpart', trControl=trctrl, tuneLength = 10)
+rpart.plot(tree_model3$finalModel)
+treePred3 <- predict(tree_model3, newdata = testSet)
+confusionMatrix(treePred3, as.factor(testSet$Expensive))
+```
+**[Comments]** <br>
+The decision tree model 3 returned to significant accuracy of 0.9684 and sensitivity of 0.9881. This is considered our final model with age_group, bmi_group, smoker, location and exercise as the predictors.
+
+## 5. 3Interpreting
+### Storing the model for shinny apps
+```{r}
+#storing the model
+datafile <- "https://intro-datascience.s3.us-east-2.amazonaws.com/HMO_data.csv"
+df_raw <- read.csv(datafile)
+df_raw$bmi <- na_interpolation(df_raw$bmi)
+df_raw <- df_raw %>% filter(!is.na(hypertension))
+
+df_add_age <- df_raw  %>% mutate(age_group = case_when(
+  df_raw$age < 20 ~ "under 18",
+  df_raw$age >= 20 & df_raw$age < 30 ~ "20-29",
+  df_raw$age >= 30 & df_raw$age < 40 ~ "30-39",
+  df_raw$age >= 40 & df_raw$age < 50 ~ "40-49",
+  df_raw$age >= 50 & df_raw$age < 60 ~ "50-59",
+  df_raw$age >= 60 ~ 'over 60'
+))
+
+df_add_bmi <- df_add_age %>% mutate(bmi_group = case_when(
+  df_add_age$bmi < 18.5 ~ "Underweight",
+  df_add_age$bmi >= 18.5 & df_add_age$bmi < 24.9 ~ "Normal Weight",
+  df_add_age$bmi >= 24.9 & df_add_age$bmi < 29.9 ~ "Overweight",
+  df_add_age$bmi >= 29.9 ~ "Obesity"
+))
+df_new <- df_add_bmi
+df_add_edu_bin <- df_new %>% mutate(is_educated = case_when(
+  df_new$education_level != "No College Degree" ~ "yes",
+  TRUE ~ "no"
+))
+
+
+
+df_add_child_bin <- df_add_edu_bin %>% mutate(have_child = case_when(
+  df_add_edu_bin$children == 0 ~ "no",
+  TRUE ~ "yes"
+))
+
+df_new <- df_add_child_bin
+df_new$hypertension <- ifelse(df_new$hypertension==1, 'yes', 'no')
+df_new$Expensive <- ifelse(df_new$cost >= 12282, 'yes', 'no')
+
+df <- data.frame(age_group = as.factor(df_new$age_group),
+                 bmi_group = as.factor(df_new$bmi_group),
+                 smoker = as.factor(df_new$smoker),
+                 location = as.factor(df_new$location),
+                 yearly_physical = as.factor(df_new$yearly_physical),
+                 exercise = as.factor(df_new$exercise),
+                 Expensive = as.factor(df_new$Expensive))
+trctrl <- trainControl(method = "repeatedcv", number = 10)
+our_model <- train(Expensive~., data = df, method = 'rpart', trControl=trctrl, tuneLength = 10)
+save(our_model, file="our_model.rda")
+```
+
