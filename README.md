@@ -1,6 +1,6 @@
 # Who Wrote the Disputed Essays?
 
-This project is building clustering models using clustering and decision tree models for defining the authorship of disputed essays in the given dataset. R code is available on the [Link]()
+This project is building clustering models using clustering and decision tree models for defining the authorship of disputed essays in the given dataset. R code is available on the [Link](https://github.com/joyinning/r_projects_repo/blob/main/Disputed-Essay_Clustering_030523.md)
 
 ## Goal 
 The goal is to find which person wrote the dispute essays, Hamilton or Madison, using a clustering algorithm with the K-Means and HAC(Hierarchical Algorithm Clustering) functions. <br>
